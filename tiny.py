@@ -1,3 +1,4 @@
+import hashlib
 import os  # 导入 os 模块以与文件系统交互
 import tinify  # 导入 tinify 模块以使用 TinyPNG API 进行图像压缩
 import asyncio  # 导入 asyncio 模块以实现异步功能
@@ -9,14 +10,17 @@ with open('config.json', 'r', encoding='utf-8') as config_file:
     config = json.load(config_file)
     tinify.key = config.get("api_key", "YOUR_API_KEY")  # 从配置文件获取 TinyPNG API 密钥
     folder_path = config.get("folder_path", "your_folder_path_here")  # 从配置文件获取目标文件夹路径
+    native_project_jsonfile = json.load(open('common-resource_project.json', 'r', encoding='utf-8'))
 
 # 新增：從 assets.json 中讀取資產數據
-with open('assets.json', 'r', encoding='utf-8') as assets_file:
+with open('assets_native.json', 'r', encoding='utf-8') as assets_file:
     assets_data = json.load(assets_file)
 
 total_original_size = 0  # 记录所有文件的原始总大小
 total_compressed_size = 0  # 记录所有文件的压缩后总大小
 compressed_file_count = 0  # 记录压缩的 PNG 文件总数
+#暫存所有壓縮的檔案路徑
+compressed_files = []
 
 async def compress_png(file_path):
     """
@@ -103,13 +107,29 @@ async def compress_folder(folder_path):
                 # 如果需要壓縮，則執行壓縮任務
                 if need_compress:
                     print(f"正在处理文件: {file_path}")  # 打印正在处理的文件
-                    tasks.append(compress_png(file_path)) # 添加压缩 PNG 文件的任务
+                    # 存储所有压缩的文件路徑
+                    compressed_files.append(file_path)
+                    # tasks.append(compress_png(file_path)) # 添加压缩 PNG 文件的任务
                 elif not need_compress:
                     print(f"文件 {file_path} 不需要压缩")
     
     # 如果有tasks，并行运行所有压缩任务，沒有就直接返回
     if tasks:
         await asyncio.gather(*tasks)
+
+def calculate_md5(file_path):
+    """
+    計算指定文件的 MD5 值。
+    參數：
+        file_path (str): 文件路徑。
+    返回：
+        str: MD5 哈希值。
+    """
+    with open(file_path, "rb") as f:
+        file_hash = hashlib.md5()
+        while chunk := f.read(8192):
+            file_hash.update(chunk)
+    return file_hash.hexdigest()
 
 if __name__ == "__main__":
     # 记录开始时间
@@ -121,6 +141,42 @@ if __name__ == "__main__":
     # 记录结束时间并计算总耗时
     end_time = time.time()
     total_time = end_time - start_time
+
+    # 如果 native_project_jsonfile 存在，則執行更新 md5 的動作，遍歷 compressed_files ，算出每一個檔案的 md5 並更新到 native_project_jsonfile 中與檔案路徑相同的 md5
+    if native_project_jsonfile:
+        # 印出 native_project_jsonfile 的內容
+        # print(f"native_project_jsonfile: {json.dumps(native_project_jsonfile, indent=4)}")
+
+        # 檢查 JSON 中是否有 'assets' 鍵，如果沒有則印出錯誤訊息，並跳過後續的更新 md5 的動作，有的話也印出訊息
+        if "assets" not in native_project_jsonfile:
+            print("JSON 中未找到 'assets' 鍵")
+        else:
+            print("已找到 'assets' 鍵")
+
+            
+        for file_path in compressed_files:
+            # 計算 md5
+            md5_hash = calculate_md5(file_path)
+            # 遍歷 native_project_jsonfile 中 'assets' 鍵的所有 key
+            for key in native_project_jsonfile['assets']:
+                # 印出 key 以便檢查
+                print(f"key: {key}")
+                # 印出 file_path 以便檢查
+                print(f"file_path: {file_path}")
+                # 取出 file_path 中 .png 的檔名
+                file_name = os.path.basename(file_path)
+                print(f"file_name: {file_name}")
+                # 如果 file_name 是 key 的一部分，則更新 md5
+                if file_name in key:
+                    print(f"更新 {file_name} 的 md5")
+                    native_project_jsonfile['assets'][key]['md5'] = md5_hash
+                    print(f"md5: {md5_hash}")
+                    break
+
+    # 把更新後的 native_project_jsonfile 寫入 common-resource_project.json
+    with open('common-resource_project.json', 'w', encoding='utf-8') as project_file:
+        json.dump(native_project_jsonfile, project_file, indent=4)
+    print("已更新 common-resource_project.json")         
     
     # 计算并打印总的节省容量信息
     total_saved_size = total_original_size - total_compressed_size
@@ -131,3 +187,6 @@ if __name__ == "__main__":
     print(f"总节省容量: {total_saved_size / 1024:.2f} KB ({total_saved_percentage:.2f}%)")
     print(f"总耗时: {total_time:.2f} 秒")
     print(f"总共压缩了 {compressed_file_count} 个 PNG 文件")
+    # 印出這個月的壓縮次數
+    compressions_this_month = tinify.compression_count
+    print(f"本月已使用 {compressions_this_month} 次压缩")
